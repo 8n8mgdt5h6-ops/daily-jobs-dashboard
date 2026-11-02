@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="My Jobs">
+<meta name="theme-color" content="#0f1115">
+<meta name="robots" content="noindex">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<title>My Jobs</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #14161a; --muted: #6b7280; --line: #e5e7eb;
+    --ok: #15803d; --ok-bg: #dcfce7; --found: #b45309; --found-bg: #fef3c7;
+    --failed: #b91c1c; --failed-bg: #fee2e2; --accent: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --card: #1a1d23; --text: #f3f4f6; --muted: #9ca3af; --line: #2a2e36;
+      --ok: #4ade80; --ok-bg: #12301d; --found: #fbbf24; --found-bg: #3a2a0c;
+      --failed: #f87171; --failed-bg: #3b1515; --accent: #60a5fa;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    padding: calc(env(safe-area-inset-top) + 12px) calc(env(safe-area-inset-right) + 16px)
+             calc(env(safe-area-inset-bottom) + 24px) calc(env(safe-area-inset-left) + 16px);
+    -webkit-tap-highlight-color: transparent;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 4px; }
+  h1 { font-size: 28px; margin: 0; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  button {
+    font: inherit; border: 0; border-radius: 999px; padding: 8px 14px; cursor: pointer;
+    background: var(--card); color: var(--accent); box-shadow: 0 0 0 1px var(--line);
+  }
+  button:disabled { opacity: .5; }
+  .card {
+    background: var(--card); border-radius: 16px; padding: 14px 16px; margin-bottom: 12px;
+    box-shadow: 0 0 0 1px var(--line);
+  }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .name { font-weight: 600; font-size: 17px; }
+  .when { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .chip { font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+  .chip.ok { color: var(--ok); background: var(--ok-bg); }
+  .chip.found { color: var(--found); background: var(--found-bg); }
+  .chip.failed { color: var(--failed); background: var(--failed-bg); }
+  .msg { margin-top: 10px; font-size: 14px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .toggle { margin-top: 10px; background: none; box-shadow: none; padding: 0; font-size: 14px; }
+  .history { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .h-item { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .h-item:last-child { border-bottom: 0; }
+  .h-item .msg { margin-top: 4px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
+  .dot.ok { background: var(--ok); } .dot.found { background: var(--found); } .dot.failed { background: var(--failed); }
+  .stale { color: var(--failed); font-weight: 600; }
+  .notice { color: var(--muted); text-align: center; padding: 40px 12px; }
+  .setup input {
+    width: 100%; font: inherit; padding: 10px 12px; border-radius: 10px; margin: 10px 0;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>My Jobs</h1>
+  <button id="refresh" type="button">Refresh</button>
+</header>
+<div class="sub" id="sub">Loading…</div>
+<main id="main"></main>
+
+<script>
+(function () {
+  var LABEL = { ok: '✓ OK', found: '🔔 Found', failed: '✕ Failed' };
+  var STALE_HOURS = 26;           // a daily job not seen for this long is flagged
+  var main = document.getElementById('main');
+  var sub = document.getElementById('sub');
+  var refreshBtn = document.getElementById('refresh');
+  var openJobs = {};
+
+  function store(k, v) {
+    try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; }
+  }
+  function gistId() {
+    var h = (location.hash || '').replace(/^#/, '').trim();
+    if (/^[0-9a-f]{20,40}$/i.test(h)) { store('gistId', h); return h; }
+    return store('gistId');
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function linkify(s) {
+    return esc(s).replace(/https?:\/\/[^\s<)\]]+/g, function (u) {
+      return '<a href="' + u + '" target="_blank" rel="noopener">' + u + '</a>';
+    });
+  }
+  function ago(iso) {
+    var t = new Date(iso).getTime();
+    if (!t) return '';
+    var m = Math.round((Date.now() - t) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + ' min ago';
+    var h = Math.round(m / 60);
+    if (h < 24) return h + ' h ago';
+    var d = Math.round(h / 24);
+    return d + (d === 1 ? ' day ago' : ' days ago');
+  }
+  function fmt(iso) {
+    var d = new Date(iso);
+    if (isNaN(d)) return '';
+    return d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function showSetup(err) {
+    sub.textContent = '';
+    main.innerHTML =
+      '<div class="card setup">' +
+      (err ? '<p class="stale">' + esc(err) + '</p>' : '') +
+      '<div class="name">Connect your results</div>' +
+      '<p class="when">Open the full dashboard link from your Mac (it ends in #&lt;gist id&gt;) once, ' +
+      'or paste the gist ID here. It is remembered on this device.</p>' +
+      '<input id="gid" placeholder="Gist ID" autocapitalize="off" autocomplete="off" spellcheck="false">' +
+      '<button id="save" type="button">Save</button></div>';
+    document.getElementById('save').onclick = function () {
+      var v = document.getElementById('gid').value.trim();
+      if (v) { store('gistId', v); load(); }
+    };
+  }
+
+  function render(data) {
+    var jobs = (data && data.jobs) || {};
+    var keys = Object.keys(jobs).sort(function (a, b) {
+      return (jobs[a].name || a).localeCompare(jobs[b].name || b);
+    });
+    sub.textContent = data && data.updated ? 'Updated ' + ago(data.updated) + ' · ' + fmt(data.updated) : '';
+    if (!keys.length) { main.innerHTML = '<div class="notice">No job runs recorded yet.</div>'; return; }
+
+    main.innerHTML = keys.map(function (k) {
+      var j = jobs[k], st = LABEL[j.status] ? j.status : 'failed';
+      var hours = (Date.now() - new Date(j.last_run).getTime()) / 3600000;
+      var stale = hours > STALE_HOURS ? ' · <span class="stale">no run for ' + Math.floor(hours / 24) + ' days</span>' : '';
+      var isOpen = !!openJobs[k];
+      var hist = (j.history || []).map(function (h) {
+        var hs = LABEL[h.status] ? h.status : 'failed';
+        return '<div class="h-item"><div><span class="dot ' + hs + '"></span>' + esc(fmt(h.time)) +
+          ' · ' + esc(LABEL[hs]) + '</div><div class="msg">' + linkify(h.message) + '</div></div>';
+      }).join('');
+      return '<div class="card" data-job="' + esc(k) + '">' +
+        '<div class="row"><div><div class="name">' + esc(j.name || k) + '</div>' +
+        '<div class="when">' + esc(fmt(j.last_run)) + ' · ' + esc(ago(j.last_run)) + stale + '</div></div>' +
+        '<span class="chip ' + st + '">' + esc(LABEL[st]) + '</span></div>' +
+        '<div class="msg' + (isOpen ? '' : ' clamp') + '">' + linkify(j.message) + '</div>' +
+        '<button class="toggle" type="button">' + (isOpen ? 'Hide history' : 'Show details & history (' + (j.history || []).length + ')') + '</button>' +
+        (isOpen ? '<div class="history">' + hist + '</div>' : '') +
+        '</div>';
+    }).join('');
+
+    Array.prototype.forEach.call(main.querySelectorAll('.toggle'), function (b) {
+      b.onclick = function () {
+        var k = b.closest('.card').getAttribute('data-job');
+        openJobs[k] = !openJobs[k];
+        render(data);
+      };
+    });
+  }
+
+  function load() {
+    var id = gistId();
+    if (!id) { showSetup(); return; }
+    refreshBtn.disabled = true;
+    sub.textContent = 'Loading…';
+    fetch('https://api.github.com/gists/' + encodeURIComponent(id), { cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 404) throw new Error('Gist not found. Check the ID.');
+        if (r.status === 403) throw new Error('GitHub rate limit reached. Try again in a few minutes.');
+        if (!r.ok) throw new Error('GitHub error ' + r.status);
+        return r.json();
+      })
+      .then(function (g) {
+        var f = g.files && g.files['status.json'];
+        if (!f) throw new Error('No status.json in this gist.');
+        if (f.truncated && f.raw_url) return fetch(f.raw_url, { cache: 'no-store' }).then(function (r) { return r.json(); });
+        return JSON.parse(f.content);
+      })
+      .then(function (data) {
+        store('lastData', JSON.stringify(data));
+        render(data);
+      })
+      .catch(function (e) {
+        var cached = store('lastData');
+        if (cached && !/not found/i.test(e.message)) {
+          try { render(JSON.parse(cached)); sub.textContent = 'Offline: showing last saved results. ' + e.message; return; } catch (x) {}
+        }
+        if (/not found|status\.json/i.test(e.message)) showSetup(e.message);
+        else { sub.textContent = e.message; }
+      })
+      .then(function () { refreshBtn.disabled = false; });
+  }
+
+  refreshBtn.onclick = load;
+  window.addEventListener('hashchange', load);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) load(); });
+  load();
+})();
+</script>
+</body>
+</html>
